@@ -140,8 +140,14 @@ func (t *Twitch) createClip(broadcasterid string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed reading body: %v", err)
 	}
-	if resp.StatusCode != http.StatusAccepted {
-		return "", errors.New(string(body))
+
+	switch resp.StatusCode {
+	case http.StatusBadRequest:
+		return "", fmt.Errorf("The ID %s was not found.", broadcasterid)
+	case http.StatusNotFound:
+		return "", errors.New("Clipping is not possible for an offline channel.")
+	case http.StatusUnauthorized:
+		return "", errors.New("Unauthorized, refresh the tokens.")
 	}
 
 	var cr clipCreateResponse
