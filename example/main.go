@@ -37,5 +37,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("hmm 3 %v", err)
 	}
-	log.Panicln(clip.Data[0].URL)
+	log.Println(clip.Data[0].URL)
 }
