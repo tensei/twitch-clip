@@ -65,12 +65,13 @@ func (t *Twitch) refreshAuthToken(ctx context.Context) (*authResponse, error) {
 		"client_secret": []string{t.ClientSecret},
 		"refresh_token": []string{t.RefreshToken},
 		"grant_type":    []string{"refresh_token"},
+		"scope":         []string{"clips:edit"},
 	}
-	req := NewPostRequest("/kraken/oauth2/token", "", query)
 
-	response, err := Do(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed POST request: %v", err)
+	req := newPostRequest("/kraken/oauth2/token", "", query)
+	response, errResp := do(ctx, req)
+	if errResp != nil {
+		return nil, fmt.Errorf("failed POST request: %s", errResp.Message)
 	}
 	defer response.Body.Close()
 
@@ -83,7 +84,7 @@ func (t *Twitch) refreshAuthToken(ctx context.Context) (*authResponse, error) {
 		return nil, errors.New(string(body) + response.Status)
 	}
 
-	auth := authResponse{}
+	var auth authResponse
 	err = json.Unmarshal(body, &auth)
 	if err != nil {
 		return nil, fmt.Errorf("failed unmarshaling body: %s with error: %v", body, err)
@@ -121,10 +122,10 @@ func (t *Twitch) createClip(ctx context.Context, broadcasterid string) (string, 
 		"broadcaster_id": []string{broadcasterid},
 	}
 
-	req := NewPostRequest("/helix/clips", t.AccessToken, query)
-	resp, err := Do(ctx, req)
-	if err != nil {
-		return "", err
+	req := newPostRequest("/helix/clips", t.AccessToken, query)
+	resp, errResp := do(ctx, req)
+	if errResp != nil {
+		return "", fmt.Errorf("error: %s", errResp.Message)
 	}
 	defer resp.Body.Close()
 
@@ -178,10 +179,10 @@ func (t *Twitch) getClip(ctx context.Context, clipid string) (*Clip, error) {
 		"id": []string{clipid},
 	}
 
-	req := NewGetRequest("/helix/clips", t.ClientID, query)
-	resp, err := Do(ctx, req)
-	if err != nil {
-		return nil, err
+	req := newGetRequest("/helix/clips", t.ClientID, query)
+	resp, errResp := do(ctx, req)
+	if errResp != nil {
+		return nil, fmt.Errorf("failed GET request: %s", errResp.Message)
 	}
 
 	defer resp.Body.Close()
@@ -200,7 +201,7 @@ func (t *Twitch) getClip(ctx context.Context, clipid string) (*Clip, error) {
 	return &clip, nil
 }
 
-func NewPostRequest(path string, token string, query url.Values) *http.Request {
+func newPostRequest(path string, token string, query url.Values) *http.Request {
 	u := url.URL{
 		Scheme:   "https",
 		Host:     "api.twitch.tv",
@@ -211,10 +212,10 @@ func NewPostRequest(path string, token string, query url.Values) *http.Request {
 	if token == "" {
 		return req
 	}
-	return WithAccessToken(req, token)
+	return withAccessToken(req, token)
 }
 
-func NewGetRequest(path string, token string, query url.Values) *http.Request {
+func newGetRequest(path string, token string, query url.Values) *http.Request {
 	u := url.URL{
 		Scheme:   "https",
 		Host:     "api.twitch.tv",
@@ -225,31 +226,53 @@ func NewGetRequest(path string, token string, query url.Values) *http.Request {
 	if token == "" {
 		return req
 	}
-	return WithClientID(req, token)
+	return withClientID(req, token)
 }
 
-func WithAccessToken(req *http.Request, accesstoken string) *http.Request {
+func withAccessToken(req *http.Request, accesstoken string) *http.Request {
 	req.Header.Set("Authorization", "Bearer "+accesstoken)
 	return req
 }
 
-func WithClientID(req *http.Request, clientid string) *http.Request {
+func withClientID(req *http.Request, clientid string) *http.Request {
 	req.Header.Set("Client-ID", clientid)
 	return req
 }
 
-func Do(ctx context.Context, req *http.Request) (*http.Response, error) {
+/*
+{
+    "error": "Unauthorized",
+    "message": "Token invalid or missing required scope",
+    "status": 401
+}
+*/
+
+type errorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+	Status  int    `json:"status"`
+}
+
+func do(ctx context.Context, req *http.Request) (*http.Response, *errorResponse) {
+	var errResp errorResponse
 	resp, err := ctxhttp.Do(ctx, nil, req)
 	if err != nil {
-		return nil, err
+		errResp.Error = err.Error()
+		errResp.Message = resp.Status
+		errResp.Status = resp.StatusCode
+		return resp, &errResp
 	}
-	switch resp.StatusCode {
-	case http.StatusBadRequest:
-		return nil, errors.New("The broadcaster_id was not found.")
-	case http.StatusNotFound:
-		return nil, errors.New("Clipping is not possible for an offline channel.")
-	case http.StatusUnauthorized:
-		return nil, errors.New("Unauthorized, refresh the tokens.")
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusAccepted {
+		return resp, nil
 	}
-	return resp, err
+
+	err = json.NewDecoder(resp.Body).Decode(&errResp)
+	if err != nil {
+		errResp.Error = err.Error()
+		errResp.Message = resp.Status
+		errResp.Status = resp.StatusCode
+		return resp, &errResp
+	}
+	return resp, &errResp
 }
